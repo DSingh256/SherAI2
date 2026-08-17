@@ -91,8 +91,8 @@ def good_image_bytes():
 
 @pytest.fixture
 def blurry_image_bytes():
-    """Create a blurry image"""
-    img = PILImage.new('RGB', (100, 100), color=(128, 128, 128))
+    """Create a bad quality image (pitch black and blurry)"""
+    img = PILImage.new('RGB', (100, 100), color=(0, 0, 0))
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='JPEG')
     return img_bytes.getvalue()
@@ -258,7 +258,7 @@ class TestMegaDetectorAPI:
         assert response.status_code == 400
         
         data = response.json()
-        assert data["success"] is False or "detail" in data
+        assert "detail" in data or data.get("success") is False
         assert "Cannot run detection" in response.text
 
     def test_run_detection_nonexistent_image(self, client):

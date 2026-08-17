@@ -21,13 +21,19 @@ from utils.image_utils import ImageUtils, PerceptualHash
 from config import settings
 
 
+from sqlalchemy.pool import StaticPool
+
 # ============ FIXTURES ============
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def test_db():
     """Create test database"""
-    # Use in-memory SQLite for testing
-    engine = create_engine("sqlite:///:memory:")
+    # Use in-memory SQLite with StaticPool for testing
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool
+    )
     Base.metadata.create_all(bind=engine)
     
     TestSessionLocal = sessionmaker(bind=engine)
@@ -41,9 +47,12 @@ def test_db():
 
 @pytest.fixture
 def sample_image_bytes():
-    """Create a sample valid image for testing"""
-    # Create a simple RGB image
-    img = PILImage.new('RGB', (100, 100), color='red')
+    """Create a sample valid image with texture for testing"""
+    from PIL import ImageDraw
+    img = PILImage.new('RGB', (100, 100), color=(120, 150, 180))
+    draw = ImageDraw.Draw(img)
+    for i in range(0, 100, 10):
+        draw.line([(i, 0), (100 - i, 100)], fill=(0, 0, 0) if i % 20 == 0 else (255, 255, 255), width=2)
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='PNG')
     return img_bytes.getvalue()
@@ -52,9 +61,7 @@ def sample_image_bytes():
 @pytest.fixture
 def blurry_image_bytes():
     """Create a blurry image for testing"""
-    # Create a blurred image
-    img = PILImage.new('RGB', (100, 100), color='gray')
-    img = img.filter(PILImage.BLUR)
+    img = PILImage.new('RGB', (100, 100), color=(128, 128, 128))
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='PNG')
     return img_bytes.getvalue()
@@ -281,8 +288,9 @@ class TestImageService:
         
         # Ingest multiple images from same camera
         for i in range(3):
+            img_bytes = sample_image_bytes + str(i).encode()
             ImageService.ingest_image(
-                image_bytes=sample_image_bytes,
+                image_bytes=img_bytes,
                 camera_id="CAM003",
                 timestamp=now,
                 db=test_db
@@ -355,7 +363,8 @@ class TestPhase1Integration:
         # Process multiple images
         ids = []
         for i in range(5):
-            img_bytes = sample_image_bytes if i % 2 == 0 else dark_image_bytes
+            base_bytes = sample_image_bytes if i % 2 == 0 else dark_image_bytes
+            img_bytes = base_bytes + str(i).encode()
             image_id, _ = ImageService.ingest_image(
                 image_bytes=img_bytes,
                 camera_id="CAM_MULTI",
