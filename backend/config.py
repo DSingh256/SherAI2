@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     ENABLE_MEGADETECTOR: bool = True
     ENABLE_SPECIESNET: bool = True
     ENABLE_OPENCLIP: bool = True  # Phase 5
-    ENABLE_SAM_SEGMENTATION: bool = False  # Phase 6
+    ENABLE_SAM_SEGMENTATION: bool = True  # Phase 7
 
     class Config:
         env_file = ".env"

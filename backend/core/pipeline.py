@@ -251,7 +251,8 @@ class ProcessingPipeline:
                         logger.info(f"[{image_id}] Stage 5: SAM Segmentation")
                         seg_result = SegmentationService.segment(
                             image.image_path, image_id, det_record.id,
-                            det.bbox.x_min, det.bbox.y_min, det.bbox.x_max, det.bbox.y_max
+                            det.bbox.x_min, det.bbox.y_min, det.bbox.x_max, det.bbox.y_max,
+                            species=speciesnet_prediction
                         )
                         
                         if seg_result:

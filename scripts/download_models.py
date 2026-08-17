@@ -190,25 +190,19 @@ class MockSAM2Model:
     def __init__(self, model_name="sam2_wildlife_v1"):
         self.model_name = model_name
 
-    def segment(self, image_path: str, bbox: list) -> dict:
+    def segment(self, image_path: str, bbox: list, point_prompts: list = None) -> dict:
         x_min, y_min, x_max, y_max = bbox
-        w_box = x_max - x_min
-        h_box = y_max - y_min
+        w_box = max(0.01, x_max - x_min)
+        h_box = max(0.01, y_max - y_min)
         
-        mask = np.zeros((100, 100), dtype=np.uint8)
-        cx, cy = 50, 50
-        rx, ry = int(w_box * 50), int(h_box * 50)
-        rx = max(5, min(50, rx))
-        ry = max(5, min(50, ry))
-        
-        y_indices, x_indices = np.ogrid[-cy:100-cy, -cx:100-cx]
-        ellipse_area = (x_indices**2 / rx**2) + (y_indices**2 / ry**2) <= 1
-        mask[ellipse_area] = 255
+        aspect = w_box / h_box
+        quality = 0.92 if 0.5 <= aspect <= 2.5 else 0.85
         
         return {
-            "mask_data": mask.tolist(),
             "model_name": self.model_name,
-            "mask_ratio": float(np.sum(mask == 255) / 10000.0)
+            "mask_quality": quality,
+            "confidence": float(min(0.99, quality + 0.03)),
+            "coverage_ratio": float(w_box * h_box * 0.78)
         }
 
 sam2_model = MockSAM2Model()

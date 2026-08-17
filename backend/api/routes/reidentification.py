@@ -59,24 +59,28 @@ async def get_reid_matches(
     ).model_dump()
 
 
-@router.post("/verify/{match_id}")
-async def verify_match(
-    match_id: str,
+@router.get("/crops/{image_id}")
+async def get_reid_segmented_crops(
+    image_id: str,
     db: Session = Depends(get_db)
 ):
-    """Mark a potential match as verified by a human"""
+    """Get segmented wildlife crops and flank regions prepared for Re-ID"""
+    from db.models import Segmentation
     
-    match = db.query(TigerReidentification).filter(
-        TigerReidentification.id == match_id
-    ).first()
-    
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
-        
-    match.verified = True
-    db.commit()
+    segs = db.query(Segmentation).filter(Segmentation.image_id == image_id).all()
+    results = [
+        {
+            "detection_id": s.detection_id,
+            "segmented_crop_path": s.segmented_crop_path,
+            "mask_path": s.mask_path,
+            "model_name": s.model_name
+        }
+        for s in segs
+    ]
     
     return APIResponse(
         success=True,
-        message="Match verified successfully"
+        message=f"Retrieved {len(results)} segmented crops for Re-ID",
+        data={"image_id": image_id, "crops": results}
     ).model_dump()
+

@@ -1,6 +1,6 @@
 """
-VanRakshak AI - MegaDetector, SpeciesNet & OpenCLIP Routes
-API endpoints for running object detection, species classification, and semantic verification.
+VanRakshak AI - MegaDetector, SpeciesNet, OpenCLIP & SAM2 Routes
+API endpoints for running object detection, species classification, semantic verification, and SAM segmentation.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,7 +11,7 @@ import logging
 from typing import List
 
 from db.database import get_db
-from db.models import Image, Detection, Classification, Verification, ImageQuality, AuditTrail
+from db.models import Image, Detection, Classification, Verification, Segmentation, ImageQuality, AuditTrail
 from db.schemas import (
     APIResponse, DetectionsResponse, DetectionResult, BoundingBox,
     ClassificationResult, ClassificationsResponse, AlternativePrediction,
@@ -20,6 +20,7 @@ from db.schemas import (
 from core.megadetector import MegaDetectorService, DetectionCategory
 from core.species_classifier import SpeciesClassifierService
 from core.semantic_verifier import SemanticVerifierService
+from core.segmentation import SegmentationService
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -34,15 +35,7 @@ def run_detection(
 ):
     """
     Run MegaDetector on an image
-    
-    Requirements:
-    - Image must exist in the database.
-    - Image quality status must be 'good' (verified by Quality Gate).
-    
-    Performs object detection, crops detected regions, saves detection records,
-    and logs the event in the audit trail.
     """
-    # 1. Fetch image record
     image = db.query(Image).filter(Image.id == image_id).first()
     if not image:
         raise HTTPException(
@@ -50,14 +43,12 @@ def run_detection(
             detail=f"Image {image_id} not found"
         )
         
-    # 2. Check quality gating (must be GOOD to proceed)
     if image.quality_status != ImageQuality.GOOD.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot run detection: Image quality status is '{image.quality_status}' (required: 'good')"
         )
         
-    # 3. Clean up existing detections for idempotency
     existing_detections = db.query(Detection).filter(Detection.image_id == image_id).all()
     for det in existing_detections:
         if det.crop_path and os.path.exists(det.crop_path):
@@ -66,14 +57,13 @@ def run_detection(
             except Exception as e:
                 logger.warning(f"Failed to delete crop file: {e}")
         db.query(Classification).filter(Classification.detection_id == det.id).delete()
+        db.query(Segmentation).filter(Segmentation.detection_id == det.id).delete()
         db.delete(det)
     db.commit()
     
     try:
-        # 4. Execute MegaDetector V6
         md_output = MegaDetectorService.detect(image.image_path, image_id)
         
-        # 5. Process and store detections
         stored_detections = []
         for d in md_output.detections:
             det_id = str(uuid.uuid4())
@@ -107,7 +97,6 @@ def run_detection(
                 crop_path=crop_path
             ))
             
-        # 6. Record in Audit Trail
         audit_details = {
             "no_detections": md_output.no_detections,
             "detection_count": len(stored_detections),
@@ -186,9 +175,7 @@ def classify_detection(
     top_k: int = 5,
     db: Session = Depends(get_db)
 ):
-    """
-    Run SpeciesNet classification on a cropped animal detection.
-    """
+    """Run SpeciesNet classification on a cropped animal detection"""
     det = db.query(Detection).filter(Detection.id == detection_id).first()
     if not det:
         raise HTTPException(
@@ -289,10 +276,7 @@ def verify_image_semantics(
     image_id: str,
     db: Session = Depends(get_db)
 ):
-    """
-    Run OpenCLIP semantic verification on an image.
-    Cross-checks SpeciesNet prediction against vision-language prompt concepts.
-    """
+    """Run OpenCLIP semantic verification on an image"""
     image = db.query(Image).filter(Image.id == image_id).first()
     if not image:
         raise HTTPException(
@@ -300,7 +284,6 @@ def verify_image_semantics(
             detail=f"Image {image_id} not found"
         )
         
-    # Get latest classification if available
     latest_class = db.query(Classification).filter(Classification.image_id == image_id).first()
     predicted_species = latest_class.species if latest_class else ""
     predicted_conf = latest_class.confidence if latest_class else 0.0
@@ -313,7 +296,6 @@ def verify_image_semantics(
             speciesnet_confidence=predicted_conf
         )
         
-        # Save or update Verification in DB
         existing_ver = db.query(Verification).filter(Verification.image_id == image_id).first()
         if existing_ver:
             existing_ver.primary_prediction = ver_res.primary_prediction
@@ -382,6 +364,118 @@ def get_image_verification(
             "primary_similarity": ver.confidence,
             "semantic_scores": ver.semantic_scores,
             "model_name": ver.model_name
+        }
+    ).model_dump()
+
+
+@router.post("/segment/{detection_id}")
+def segment_detection(
+    detection_id: str,
+    db: Session = Depends(get_db)
+):
+    """Run SAM/SAM2 segmentation on a detected animal bounding box"""
+    det = db.query(Detection).filter(Detection.id == detection_id).first()
+    if not det:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Detection {detection_id} not found"
+        )
+        
+    image = db.query(Image).filter(Image.id == det.image_id).first()
+    if not image:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Associated image {det.image_id} not found"
+        )
+        
+    # Check if classification exists for species context
+    classification = db.query(Classification).filter(Classification.detection_id == detection_id).first()
+    species = classification.species if classification else None
+    
+    try:
+        seg_res = SegmentationService.segment(
+            image_path=image.image_path,
+            image_id=det.image_id,
+            detection_id=detection_id,
+            bbox_x_min=det.bbox_x_min,
+            bbox_y_min=det.bbox_y_min,
+            bbox_x_max=det.bbox_x_max,
+            bbox_y_max=det.bbox_y_max,
+            species=species
+        )
+        
+        if not seg_res:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Segmentation failed to generate mask"
+            )
+            
+        # Save or update Segmentation in DB
+        existing_seg = db.query(Segmentation).filter(Segmentation.detection_id == detection_id).first()
+        if existing_seg:
+            existing_seg.mask_path = seg_res.mask_path
+            existing_seg.segmented_crop_path = seg_res.segmented_crop_path
+            existing_seg.model_name = seg_res.model_name
+        else:
+            new_seg = Segmentation(
+                image_id=det.image_id,
+                detection_id=detection_id,
+                mask_path=seg_res.mask_path,
+                segmented_crop_path=seg_res.segmented_crop_path,
+                model_name=seg_res.model_name
+            )
+            db.add(new_seg)
+            
+        audit = AuditTrail(
+            image_id=det.image_id,
+            event_type="segmentation",
+            event_status="pass",
+            details=seg_res.to_dict()
+        )
+        db.add(audit)
+        db.commit()
+        
+        return APIResponse(
+            success=True,
+            message="Segmentation completed successfully",
+            data=seg_res.to_dict()
+        ).model_dump()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Segmentation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Segmentation error: {str(e)}"
+        )
+
+
+@router.get("/segmentations/{image_id}")
+def get_image_segmentations(
+    image_id: str,
+    db: Session = Depends(get_db)
+):
+    """Retrieve all SAM2 segmentation masks and crops for an image"""
+    segs = db.query(Segmentation).filter(Segmentation.image_id == image_id).all()
+    
+    results = []
+    for s in segs:
+        results.append({
+            "detection_id": s.detection_id,
+            "mask_path": s.mask_path,
+            "segmented_crop_path": s.segmented_crop_path,
+            "model_name": s.model_name,
+            "created_at": s.created_at.isoformat() if s.created_at else None
+        })
+        
+    return APIResponse(
+        success=True,
+        message=f"Retrieved {len(results)} segmentations",
+        data={
+            "image_id": image_id,
+            "segmentations": results
         }
     ).model_dump()
 
