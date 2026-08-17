@@ -223,8 +223,8 @@ def run_validation():
     
     total_checks += 1
     pipe_img_id, _ = ImageService.ingest_image(
-        image_bytes=create_tiger_image_bytes() + os.urandom(16),
-        camera_id="CAM_VAL_P7_PIPE",
+        image_bytes=create_tiger_image_bytes() + b"_P7_TIGER_STABLE_TEST_",
+        camera_id="CAM_TEST_0",
         timestamp=datetime.utcnow(),
         db=session
     )

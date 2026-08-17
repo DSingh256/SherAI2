@@ -10,10 +10,12 @@ import {
   Camera, 
   Bell, 
   History,
-  Fingerprint
+  Fingerprint,
+  Sparkles
 } from "lucide-react";
 
 const NAV_ITEMS = [
+  { name: "Analyze Image", path: "/analyze", icon: Sparkles, badge: "AI" },
   { name: "Dashboard", path: "/", icon: LayoutDashboard },
   { name: "Review Queue", path: "/review", icon: CheckSquare, badge: "12" },
   { name: "Live Map", path: "/map", icon: MapIcon },

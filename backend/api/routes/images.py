@@ -9,10 +9,180 @@ from datetime import datetime
 from typing import Optional
 from db.database import get_db
 from db.schemas import ImageUploadRequest, APIResponse
+from db.models import Image, Detection, Classification, Verification, Segmentation, Decision
 from services.image_service import ImageService
+from core.pipeline import ProcessingPipeline
 from config import settings
 
 router = APIRouter(prefix="/api/images", tags=["images"])
+
+
+@router.post("/analyze")
+async def analyze_image(
+    file: UploadFile = File(...),
+    camera_id: str = Form("USER_UPLOAD"),
+    location: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload a camera-trap image and run the full AI pipeline.
+
+    Returns comprehensive analysis results including:
+    - Quality assessment metrics
+    - Object detections (animal/human/vehicle)
+    - Species classification with alternatives
+    - OpenCLIP semantic verification
+    - Decision engine routing
+    - Explainability reasoning
+    """
+
+    # Validate file type
+    allowed = ["image/jpeg", "image/png", "image/gif", "image/tiff", "image/webp"]
+    if file.content_type not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type: {file.content_type}. Supported: JPG, PNG, GIF, TIFF, WEBP"
+        )
+
+    # Read file bytes
+    image_bytes = await file.read()
+    file_size = len(image_bytes)
+
+    max_size = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if file_size > max_size:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large: {file_size} bytes (max {max_size})"
+        )
+
+    ts = datetime.utcnow()
+
+    try:
+        # Step 1: Ingest the image (or find existing duplicate)
+        import hashlib
+        image_hash = hashlib.sha256(image_bytes).hexdigest()
+
+        # Check if this image already exists
+        existing = db.query(Image).filter(Image.image_hash == image_hash).first()
+
+        if existing:
+            image_id = existing.id
+            # Clear old pipeline results so we can re-run fresh
+            from db.models import AuditTrail, Segmentation, Verification as VerifModel, TigerReidentification, Alert
+            db.query(Detection).filter(Detection.image_id == image_id).delete()
+            db.query(Classification).filter(Classification.image_id == image_id).delete()
+            db.query(Verification).filter(Verification.image_id == image_id).delete()
+            db.query(Segmentation).filter(Segmentation.image_id == image_id).delete()
+            db.query(Decision).filter(Decision.image_id == image_id).delete()
+            db.query(AuditTrail).filter(AuditTrail.image_id == image_id).delete()
+            db.commit()
+        else:
+            image_id, metadata = ImageService.ingest_image(
+                image_bytes=image_bytes,
+                camera_id=camera_id,
+                timestamp=ts,
+                location=location,
+                db=db
+            )
+
+        # Step 2: Run the full AI pipeline
+        pipeline_result = ProcessingPipeline.process_image(image_id, db)
+
+        # Step 3: Query all results from DB to build the response
+        image = db.query(Image).filter(Image.id == image_id).first()
+        detections = db.query(Detection).filter(Detection.image_id == image_id).all()
+        classifications = db.query(Classification).filter(Classification.image_id == image_id).all()
+        verifications = db.query(Verification).filter(Verification.image_id == image_id).all()
+        decision = db.query(Decision).filter(Decision.image_id == image_id).first()
+
+        # Build detections list
+        detection_results = []
+        for det in detections:
+            det_classifs = [c for c in classifications if c.detection_id == det.id]
+            detection_results.append({
+                "id": det.id,
+                "object_type": det.object_type,
+                "confidence": det.confidence,
+                "bbox": {
+                    "x_min": det.bbox_x_min,
+                    "y_min": det.bbox_y_min,
+                    "x_max": det.bbox_x_max,
+                    "y_max": det.bbox_y_max
+                },
+                "crop_path": det.crop_path,
+                "classifications": [
+                    {
+                        "species": c.species,
+                        "confidence": c.confidence,
+                        "alternatives": c.alternative_predictions or [],
+                        "model_name": c.model_name
+                    }
+                    for c in det_classifs
+                ]
+            })
+
+        # Build verification result
+        verification_data = None
+        if verifications:
+            v = verifications[0]
+            verification_data = {
+                "primary_prediction": v.primary_prediction,
+                "confidence": v.confidence,
+                "semantic_scores": v.semantic_scores,
+                "model_name": v.model_name
+            }
+
+        # Build decision result
+        decision_data = None
+        if decision:
+            decision_data = {
+                "species": decision.species,
+                "confidence": decision.confidence,
+                "decision": decision.decision,
+                "confidence_level": decision.confidence_level,
+                "reasoning": decision.reasoning,
+                "signals": decision.signals,
+                "is_tiger": decision.is_tiger
+            }
+
+        # Final response
+        return APIResponse(
+            success=True,
+            message="Image analyzed successfully",
+            data={
+                "image_id": image_id,
+                "pipeline_success": pipeline_result.success,
+                "pipeline_time_ms": round(pipeline_result.total_time_ms, 2),
+                "image": {
+                    "camera_id": image.camera_id if image else camera_id,
+                    "timestamp": str(ts),
+                    "location": location,
+                    "width": image.image_width if image else None,
+                    "height": image.image_height if image else None,
+                    "file_size": file_size,
+                    "image_path": image.image_path if image else None,
+                },
+                "quality": {
+                    "status": image.quality_status if image else "unknown",
+                    "score": image.quality_score if image else None,
+                    "blur_score": image.blur_score if image else None,
+                    "brightness": image.brightness if image else None,
+                    "contrast": image.contrast if image else None,
+                    "passed": pipeline_result.quality_passed
+                },
+                "detections": detection_results,
+                "verification": verification_data,
+                "decision": decision_data,
+            }
+        ).model_dump()
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Analysis failed: {str(e)}"
+        )
 
 
 @router.post("/upload")

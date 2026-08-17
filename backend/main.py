@@ -6,9 +6,11 @@ Entry point for backend API
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
 import logging
+import os
 
 # Import configuration and database
 from config import settings
@@ -106,6 +108,11 @@ app.include_router(cameras.router)
 app.include_router(alerts.router)
 app.include_router(audit.router)
 app.include_router(reidentification.router)
+
+# Mount storage directory for serving uploaded images, crops, and masks
+storage_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "storage")
+os.makedirs(storage_path, exist_ok=True)
+app.mount("/storage", StaticFiles(directory=storage_path), name="storage")
 
 
 # ============ PIPELINE TRIGGER ============
