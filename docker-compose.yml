@@ -1,0 +1,65 @@
+version: "3.9"
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: vanrakshak_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: vanrakshak
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vanrakshak_network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: vanrakshak_backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/vanrakshak
+      DEBUG: "False"
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app/backend
+      - ./storage:/app/storage
+    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - vanrakshak_network
+
+  # Next.js Frontend (Optional for Phase 1)
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: ../Dockerfile.frontend
+  #   container_name: vanrakshak_frontend
+  #   ports:
+  #     - "3000:3000"
+  #   volumes:
+  #     - ./frontend:/app
+  #   networks:
+  #     - vanrakshak_network
+
+volumes:
+  postgres_data:
+
+networks:
+  vanrakshak_network:
+    driver: bridge

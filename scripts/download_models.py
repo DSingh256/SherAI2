@@ -1,0 +1,230 @@
+import os
+import pickle
+import random
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+
+# Ensure target models directory exists
+os.makedirs("models", exist_ok=True)
+
+print("🚀 Starting mock model generation and training...")
+
+# ==========================================
+# 1. MEGADETECTOR MODEL SERIALIZATION
+# ==========================================
+print("📝 Creating MegaDetector model...")
+
+class MockMegaDetectorModel:
+    """Mock MegaDetector V6 model structure for serialization"""
+    def __init__(self, confidence_threshold=0.5):
+        self.confidence_threshold = confidence_threshold
+        self.categories = ["animal", "human", "vehicle"]
+        # Different scenario profiles for mock data generation
+        self.profiles = ["animal_only", "multi_animal", "animal_human", "human_only", "vehicle_only", "empty"]
+        self.profile_weights = [0.55, 0.15, 0.05, 0.08, 0.04, 0.13]
+
+    def predict(self, image_path: str, image_id: str = "") -> dict:
+        import hashlib
+        # Deterministic seeding based on image identifiers
+        seed_str = f"{image_path}_{image_id}"
+        seed = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        
+        profile = rng.choices(self.profiles, weights=self.profile_weights, k=1)[0]
+        detections = []
+        
+        if profile == "empty":
+            pass
+        elif profile == "multi_animal":
+            num_animals = rng.randint(2, 4)
+            for i in range(num_animals):
+                conf = rng.uniform(0.75, 0.99)
+                bbox = self._gen_bbox(rng, i, num_animals)
+                detections.append({
+                    "category": "animal",
+                    "confidence": conf,
+                    "bbox": bbox
+                })
+        else:
+            categories_to_check = []
+            if "animal" in profile:
+                categories_to_check.append("animal")
+            if "human" in profile:
+                categories_to_check.append("human")
+            if "vehicle" in profile:
+                categories_to_check.append("vehicle")
+                
+            for cat in categories_to_check:
+                conf = rng.uniform(0.60, 0.98)
+                if conf >= self.confidence_threshold:
+                    bbox = self._gen_bbox(rng)
+                    detections.append({
+                        "category": cat,
+                        "confidence": conf,
+                        "bbox": bbox
+                    })
+        return {
+            "detections": detections,
+            "processing_time_ms": rng.uniform(180, 420)
+        }
+
+    def _gen_bbox(self, rng, index=0, total=1):
+        if total == 1:
+            cx = rng.uniform(0.3, 0.7)
+            cy = rng.uniform(0.3, 0.7)
+            w = rng.uniform(0.2, 0.4)
+            h = rng.uniform(0.2, 0.5)
+        else:
+            segment = 1.0 / total
+            cx = segment * index + segment * rng.uniform(0.3, 0.7)
+            cy = rng.uniform(0.3, 0.7)
+            w = rng.uniform(0.12, 0.22)
+            h = rng.uniform(0.18, 0.38)
+            
+        return [
+            max(0.0, cx - w/2),
+            max(0.0, cy - h/2),
+            min(1.0, cx + w/2),
+            min(1.0, cy + h/2)
+        ]
+
+megadetector_model = MockMegaDetectorModel()
+with open("models/megadetector.pkl", "wb") as f:
+    pickle.dump(megadetector_model, f)
+print("✓ MegaDetector model saved to models/megadetector.pkl")
+
+
+# ==========================================
+# 2. SPECIESNET MODEL TRAINING
+# ==========================================
+print("\n📝 Training SpeciesNet RandomForest model...")
+
+# 15 Target Indian reserve species
+SPECIES_LIST = [
+    "Bengal Tiger", "Indian Leopard", "Asian Elephant", "Sambar Deer", 
+    "Spotted Deer", "Wild Boar", "Sloth Bear", "Indian Gaur", 
+    "Nilgai", "Golden Jackal", "Dhole", "Striped Hyena", 
+    "Jungle Cat", "Rhesus Macaque", "Common Langur"
+]
+
+# Generate synthetic features for model training
+# Features: [mean_r, mean_g, mean_b, std_r, std_g, std_b, contrast, brightness, width, height, aspect_ratio]
+np.random.seed(42)
+X_data = []
+y_data = []
+
+# Define statistical feature profiles (color, contrast, dimensions) for each species
+PROFILES = {
+    # Tiger: Orange-ish (high R, medium G, low B), high contrast (stripes), medium-large size
+    "Bengal Tiger":   {"mean": [180, 110, 50, 45, 35, 25, 60, 115, 450, 350, 1.3], "std": [15, 10, 10, 5, 5, 5, 8, 10, 50, 40, 0.1]},
+    # Leopard: Golden-ish, high contrast (spots)
+    "Indian Leopard": {"mean": [165, 125, 65, 40, 30, 20, 55, 118, 380, 280, 1.35], "std": [15, 10, 10, 5, 5, 5, 8, 10, 40, 30, 0.1]},
+    # Elephant: Gray (balanced channels), low contrast, very large
+    "Asian Elephant": {"mean": [110, 110, 110, 15, 15, 15, 20, 110, 950, 800, 1.2], "std": [10, 10, 10, 3, 3, 3, 4, 8, 80, 70, 0.05]},
+    # Sambar Deer: Dark brown, moderate size
+    "Sambar Deer":    {"mean": [100, 75, 50, 25, 20, 15, 30, 75, 350, 420, 0.83], "std": [12, 8, 6, 4, 3, 2, 5, 8, 35, 40, 0.08]},
+    # Spotted Deer: Light brown/spotted
+    "Spotted Deer":   {"mean": [130, 95, 60, 35, 25, 18, 45, 95, 260, 280, 0.93], "std": [12, 10, 8, 4, 4, 3, 6, 8, 25, 30, 0.08]},
+    # Wild Boar: Very dark/black, low height
+    "Wild Boar":      {"mean": [60, 55, 50, 12, 10, 8, 15, 55, 280, 190, 1.47], "std": [8, 8, 8, 2, 2, 2, 3, 6, 30, 20, 0.1]},
+    # Sloth Bear: Shaggy black (low values, low contrast), large
+    "Sloth Bear":     {"mean": [45, 45, 45, 10, 10, 10, 12, 45, 420, 380, 1.1], "std": [6, 6, 6, 2, 2, 2, 3, 5, 45, 40, 0.07]},
+    # Indian Gaur: Very dark/black but massive
+    "Indian Gaur":    {"mean": [65, 60, 55, 15, 15, 12, 22, 60, 800, 750, 1.07], "std": [8, 8, 8, 3, 3, 3, 4, 6, 70, 65, 0.06]},
+    # Nilgai: Grayish-blue, tall
+    "Nilgai":         {"mean": [95, 100, 105, 20, 20, 20, 25, 100, 400, 480, 0.83], "std": [10, 10, 10, 3, 3, 3, 4, 8, 40, 45, 0.07]},
+    # Jackal: Sandy brown, small
+    "Golden Jackal":  {"mean": [140, 110, 80, 25, 20, 15, 35, 110, 220, 160, 1.38], "std": [12, 9, 8, 3, 3, 2, 5, 8, 20, 15, 0.1]},
+    # Dhole: Reddish-brown, small
+    "Dhole":          {"mean": [155, 85, 45, 30, 20, 12, 38, 95, 210, 150, 1.4], "std": [12, 8, 6, 3, 2, 2, 5, 8, 20, 15, 0.1]},
+    # Hyena: Striped gray, sloped back
+    "Striped Hyena":  {"mean": [115, 110, 100, 30, 25, 20, 42, 108, 290, 250, 1.16], "std": [10, 10, 9, 4, 3, 3, 6, 8, 30, 25, 0.08]},
+    # Jungle Cat: Sandy small cat
+    "Jungle Cat":     {"mean": [135, 115, 90, 22, 18, 15, 28, 113, 150, 120, 1.25], "std": [10, 8, 8, 3, 2, 2, 4, 8, 15, 12, 0.08]},
+    # Macaque: Brown/tan monkey, small
+    "Rhesus Macaque": {"mean": [120, 105, 85, 18, 15, 12, 24, 103, 130, 130, 1.0], "std": [9, 8, 7, 2, 2, 2, 3, 6, 12, 12, 0.05]},
+    # Langur: Gray body, black face, tall/long tail
+    "Common Langur":  {"mean": [105, 105, 105, 28, 25, 22, 36, 105, 140, 220, 0.64], "std": [8, 8, 8, 3, 3, 2, 5, 6, 15, 20, 0.05]},
+}
+
+# Build dataset of 150 samples per class
+for label_idx, species in enumerate(SPECIES_LIST):
+    profile = PROFILES[species]
+    for _ in range(150):
+        sample = []
+        for mean, std in zip(profile["mean"], profile["std"]):
+            val = np.random.normal(mean, std)
+            sample.append(max(0.0, val)) # Features cannot be negative
+        X_data.append(sample)
+        y_data.append(label_idx)
+
+X_data = np.array(X_data)
+y_data = np.array(y_data)
+
+# Train Random Forest Classifier
+rf_clf = RandomForestClassifier(n_estimators=60, max_depth=10, random_state=42)
+rf_clf.fit(X_data, y_data)
+
+# Check training accuracy
+train_acc = rf_clf.score(X_data, y_data)
+print(f"✓ Model trained successfully. Training Accuracy: {train_acc * 100:.2f}%")
+
+# Save model object along with classes map
+speciesnet_model = {
+    "classifier": rf_clf,
+    "species_list": SPECIES_LIST
+}
+
+with open("models/speciesnet.pkl", "wb") as f:
+    pickle.dump(speciesnet_model, f)
+print("✓ SpeciesNet model saved to models/speciesnet.pkl")
+
+
+# ==========================================
+# 3. SAM2 SEGMENTATION MODEL SERIALIZATION
+# ==========================================
+print("\n📝 Creating SAM2 segmentation model...")
+
+class MockSAM2Model:
+    """Mock SAM2 Segmentation model structure for serialization"""
+    def __init__(self, model_name="sam2_wildlife_v1"):
+        self.model_name = model_name
+
+    def segment(self, image_path: str, bbox: list) -> dict:
+        """
+        Calculates simulated ellipse segmentation mask
+        within bounding box coordinates.
+        """
+        # Bounding box coordinates: [x_min, y_min, x_max, y_max]
+        x_min, y_min, x_max, y_max = bbox
+        
+        # Bounding box dimensions
+        w_box = x_max - x_min
+        h_box = y_max - y_min
+        
+        # Create a mock 100x100 relative mask
+        mask = np.zeros((100, 100), dtype=np.uint8)
+        
+        # Calculate center and radii
+        cx, cy = 50, 50
+        rx, ry = int(w_box * 50), int(h_box * 50)
+        rx = max(5, min(50, rx))
+        ry = max(5, min(50, ry))
+        
+        # Draw ellipse in mask
+        y_indices, x_indices = np.ogrid[-cy:100-cy, -cx:100-cx]
+        ellipse_area = (x_indices**2 / rx**2) + (y_indices**2 / ry**2) <= 1
+        mask[ellipse_area] = 255
+        
+        return {
+            "mask_data": mask.tolist(),
+            "model_name": self.model_name,
+            "mask_ratio": float(np.sum(mask == 255) / 10000.0)
+        }
+
+sam2_model = MockSAM2Model()
+with open("models/sam2.pkl", "wb") as f:
+    pickle.dump(sam2_model, f)
+print("✓ SAM2 model saved to models/sam2.pkl")
+
+print("\n🎉 All 3 models created, trained, and serialized successfully!")
