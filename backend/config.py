@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # Feature Flags
     ENABLE_MEGADETECTOR: bool = True
     ENABLE_SPECIESNET: bool = True
-    ENABLE_OPENCLIP: bool = False  # Phase 5
+    ENABLE_OPENCLIP: bool = True  # Phase 5
     ENABLE_SAM_SEGMENTATION: bool = False  # Phase 6
 
     class Config:

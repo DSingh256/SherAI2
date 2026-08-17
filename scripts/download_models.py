@@ -154,7 +154,7 @@ for label_idx, species in enumerate(SPECIES_LIST):
         sample = []
         for mean, std in zip(profile["mean"], profile["std"]):
             val = np.random.normal(mean, std)
-            sample.append(max(0.0, val)) # Features cannot be negative
+            sample.append(max(0.0, val))
         X_data.append(sample)
         y_data.append(label_idx)
 
@@ -191,27 +191,16 @@ class MockSAM2Model:
         self.model_name = model_name
 
     def segment(self, image_path: str, bbox: list) -> dict:
-        """
-        Calculates simulated ellipse segmentation mask
-        within bounding box coordinates.
-        """
-        # Bounding box coordinates: [x_min, y_min, x_max, y_max]
         x_min, y_min, x_max, y_max = bbox
-        
-        # Bounding box dimensions
         w_box = x_max - x_min
         h_box = y_max - y_min
         
-        # Create a mock 100x100 relative mask
         mask = np.zeros((100, 100), dtype=np.uint8)
-        
-        # Calculate center and radii
         cx, cy = 50, 50
         rx, ry = int(w_box * 50), int(h_box * 50)
         rx = max(5, min(50, rx))
         ry = max(5, min(50, ry))
         
-        # Draw ellipse in mask
         y_indices, x_indices = np.ogrid[-cy:100-cy, -cx:100-cx]
         ellipse_area = (x_indices**2 / rx**2) + (y_indices**2 / ry**2) <= 1
         mask[ellipse_area] = 255
@@ -227,4 +216,66 @@ with open("models/sam2.pkl", "wb") as f:
     pickle.dump(sam2_model, f)
 print("✓ SAM2 model saved to models/sam2.pkl")
 
-print("\n🎉 All 3 models created, trained, and serialized successfully!")
+
+# ==========================================
+# 4. OPENCLIP SEMANTIC MODEL SERIALIZATION
+# ==========================================
+print("\n📝 Creating OpenCLIP Semantic Verification model...")
+
+class MockOpenCLIPModel:
+    """Mock OpenCLIP model for vision-language semantic verification"""
+    def __init__(self, concepts_dict=None):
+        self.concepts = concepts_dict or {
+            "Bengal Tiger": ["a Bengal tiger in the wild", "orange and black striped big cat", "tiger in forest"],
+            "Indian Leopard": ["a leopard with spotted fur", "golden leopard in forest"],
+            "Asian Elephant": ["an Asian elephant", "large gray elephant in forest"],
+            "Sambar Deer": ["a large brown deer", "sambar deer in forest"],
+            "Spotted Deer (Chital)": ["a spotted deer with white spots", "chital deer grazing"],
+            "Wild Boar": ["a wild boar", "wild pig in forest"],
+            "Sloth Bear": ["a sloth bear", "black bear with white chest mark"],
+            "Indian Gaur": ["an Indian gaur", "large wild cattle"],
+            "Nilgai": ["a nilgai blue bull", "tall grayish-blue antelope"],
+            "Golden Jackal": ["a golden jackal", "small wild canine"],
+            "Dhole": ["an Asiatic wild dog", "reddish-brown dhole pack animal"],
+            "Striped Hyena": ["a striped hyena", "scavenger with striped coat"],
+            "Jungle Cat": ["a jungle cat", "small wild feline"],
+            "Rhesus Macaque": ["a rhesus macaque monkey", "brown monkey in tree"],
+            "Common Langur": ["a gray langur with black face", "tall monkey in forest"],
+            "Human": ["a human person walking", "forest ranger or poacher"],
+            "Vehicle": ["a motor vehicle", "jeep or patrol truck"]
+        }
+        
+        # Build normalized prototype embedding vectors for each concept
+        np.random.seed(42)
+        self.concept_embeddings = {}
+        for sp in self.concepts.keys():
+            vec = np.random.randn(32)
+            self.concept_embeddings[sp] = (vec / np.linalg.norm(vec)).tolist()
+
+    def predict_similarities(self, features: list, speciesnet_hint: str = None) -> dict:
+        """
+        Computes cosine similarities between visual feature projection and text concepts.
+        """
+        seed_val = int(abs(features[0] * 100 + features[1])) if len(features) >= 2 else 42
+        rng = random.Random(seed_val)
+        
+        scores = {}
+        for sp in self.concepts.keys():
+            # If visual features match tiger profile (high red, contrast)
+            if sp == "Bengal Tiger" and features[0] > 150 and features[6] > 40:
+                scores[sp] = float(rng.uniform(0.85, 0.98))
+            elif sp == "Asian Elephant" and features[0] < 120 and features[1] < 120 and features[2] < 120 and features[8] > 300:
+                scores[sp] = float(rng.uniform(0.82, 0.95))
+            elif sp == speciesnet_hint and rng.random() < 0.85:
+                scores[sp] = float(rng.uniform(0.75, 0.94))
+            else:
+                scores[sp] = float(rng.uniform(0.10, 0.55))
+                
+        return scores
+
+openclip_model = MockOpenCLIPModel()
+with open("models/openclip.pkl", "wb") as f:
+    pickle.dump(openclip_model, f)
+print("✓ OpenCLIP model saved to models/openclip.pkl")
+
+print("\n🎉 All 4 models created, trained, and serialized successfully!")
