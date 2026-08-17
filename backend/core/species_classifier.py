@@ -1,58 +1,17 @@
 """
-VanRakshak AI - SpeciesNet Classification
-Species classification for detected animals.
-
-Takes cropped animal detections from MegaDetector and predicts species
-with confidence scores and top-K alternatives.
-
-Simulated mode uses a pool of 15+ Indian wildlife species with weighted
-random selection seeded by image hash for reproducibility.
+VanRakshak AI - Species Classification
+Uses OpenCLIP Zero-Shot classification for highly accurate specialized wildlife detection.
 """
 
-import hashlib
-import random
 import time
 import os
-import pickle
-import numpy as np
-import cv2
-from PIL import Image as PILImage
-from typing import List, Dict, Optional
+from typing import List
 from dataclasses import dataclass, field
-
-
-# Indian wildlife species pool with relative abundance weights
-SPECIES_POOL = {
-    "Bengal Tiger": 0.08,
-    "Indian Leopard": 0.07,
-    "Sambar Deer": 0.15,
-    "Spotted Deer (Chital)": 0.16,
-    "Wild Boar": 0.12,
-    "Asian Elephant": 0.05,
-    "Sloth Bear": 0.04,
-    "Indian Gaur": 0.06,
-    "Nilgai": 0.05,
-    "Indian Muntjac (Barking Deer)": 0.04,
-    "Langur": 0.06,
-    "Rhesus Macaque": 0.04,
-    "Indian Porcupine": 0.02,
-    "Jungle Cat": 0.02,
-    "Indian Hare": 0.02,
-    "Peafowl": 0.02,
-}
-
-# Tiger-specific species for confusion matrix (species commonly confused with tigers)
-TIGER_CONFUSION = {
-    "Bengal Tiger": 0.70,
-    "Indian Leopard": 0.15,
-    "Jungle Cat": 0.05,
-    "Sambar Deer": 0.03,
-    "Other": 0.07,
-}
-
+from PIL import Image as PILImage
+import torch
 
 from config import settings
-
+from core.openclip_model import SharedOpenCLIP
 
 @dataclass
 class SpeciesPrediction:
@@ -66,7 +25,6 @@ class SpeciesPrediction:
             "confidence": round(self.confidence, 4),
         }
 
-
 @dataclass
 class SpeciesClassificationResult:
     """Complete classification result for one detection"""
@@ -75,7 +33,7 @@ class SpeciesClassificationResult:
     primary_confidence: float
     alternatives: List[SpeciesPrediction] = field(default_factory=list)
     is_tiger: bool = False
-    model_name: str = "speciesnet_v1_simulated"
+    model_name: str = "openclip_vit_b32_zeroshot"
     processing_time_ms: float = 0.0
     passes_threshold: bool = True
     confidence_level: str = "high"
@@ -97,7 +55,6 @@ class SpeciesClassificationResult:
 
     @property
     def top_predictions(self) -> List[SpeciesPrediction]:
-        """All predictions including primary, sorted by confidence"""
         all_preds = [SpeciesPrediction(self.primary_species, self.primary_confidence)]
         all_preds.extend(self.alternatives)
         return sorted(all_preds, key=lambda p: p.confidence, reverse=True)
@@ -105,50 +62,42 @@ class SpeciesClassificationResult:
 
 class SpeciesClassifierService:
     """
-    SpeciesNet species classification service.
-
-    Simulated mode generates realistic species predictions
-    for Indian wildlife based on image characteristics.
+    Highly efficient Zero-Shot Species Classification using OpenCLIP.
     """
 
-    @staticmethod
-    def preprocess_image(image_path: str) -> Optional[List[float]]:
-        """
-        Validates and preprocesses an image crop into standardized feature vector.
-        Standardizes to 224x224 RGB image representation and extracts:
-        [mean_r, mean_g, mean_b, std_r, std_g, std_b, contrast, brightness, width, height, aspect_ratio]
-        """
-        if not image_path or not os.path.exists(image_path):
-            return None
-        
-        try:
-            img_pil = PILImage.open(image_path)
-            w, h = img_pil.size
-            aspect_ratio = float(w) / float(h) if h > 0 else 1.0
-            
-            # Standardize crop size for feature consistency
-            resized = img_pil.resize((224, 224), PILImage.BILINEAR)
-            img_rgb = np.array(resized.convert("RGB"))
-            
-            mean_r = float(np.mean(img_rgb[:, :, 0]))
-            mean_g = float(np.mean(img_rgb[:, :, 1]))
-            mean_b = float(np.mean(img_rgb[:, :, 2]))
-            std_r = float(np.std(img_rgb[:, :, 0]))
-            std_g = float(np.std(img_rgb[:, :, 1]))
-            std_b = float(np.std(img_rgb[:, :, 2]))
-            
-            gray = np.mean(img_rgb, axis=2)
-            brightness = float(np.mean(gray))
-            contrast = float(np.std(gray))
-            
-            return [
-                mean_r, mean_g, mean_b,
-                std_r, std_g, std_b,
-                contrast, brightness,
-                float(w), float(h), aspect_ratio
-            ]
-        except Exception:
-            return None
+    # Target specialized species list for Indian wildlife
+    SPECIES_LIST = [
+        "Bengal Tiger",
+        "Indian Leopard",
+        "Snow Leopard",
+        "Asiatic Lion",
+        "Asian Elephant",
+        "Gaur (Indian Bison)",
+        "Sambar Deer",
+        "Chital (Spotted Deer)",
+        "Nilgai (Blue Bull)",
+        "Sloth Bear",
+        "Wild Boar",
+        "Dhole (Wild Dog)",
+        "Indian Rhinoceros",
+        "Blackbuck",
+        "Macaque",
+        "Langur"
+    ]
+    
+    # Pre-computed text prompts
+    _TEXT_PROMPTS = [f"A camera trap photo of a {species} in the wild" for species in SPECIES_LIST]
+    _text_features = None
+
+    @classmethod
+    def _get_text_features(cls, model, tokenizer, device):
+        if cls._text_features is None:
+            with torch.no_grad():
+                text = tokenizer(cls._TEXT_PROMPTS).to(device)
+                text_features = model.encode_text(text)
+                text_features /= text_features.norm(dim=-1, keepdim=True)
+                cls._text_features = text_features
+        return cls._text_features
 
     @staticmethod
     def classify(
@@ -156,199 +105,83 @@ class SpeciesClassifierService:
         detection_id: str = "",
         top_k: int = 5,
     ) -> SpeciesClassificationResult:
-        """
-        Classify species from a cropped animal image.
-
-        Args:
-            image_path: Path to cropped animal image
-            detection_id: Detection identifier
-            top_k: Number of top predictions to return
-
-        Returns:
-            SpeciesClassificationResult with species predictions
-        """
         start_time = time.time()
-
-        # 1. Preprocessing & Input Validation
-        features = SpeciesClassifierService.preprocess_image(image_path)
-
-        # 2. Check if pickled model exists
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        pkl_path = os.path.join(base_dir, "models", "speciesnet.pkl")
-        if not os.path.exists(pkl_path):
-            pkl_path = os.path.join("models", "speciesnet.pkl")
-
-        if features is not None and os.path.exists(pkl_path):
-            try:
-                with open(pkl_path, "rb") as f:
-                    model_dict = pickle.load(f)
+        
+        model, preprocess, tokenizer = SharedOpenCLIP.get_model()
+        device = SharedOpenCLIP.get_device()
+        
+        if not model or not os.path.exists(image_path):
+            return SpeciesClassificationResult(
+                detection_id=detection_id,
+                primary_species="Unknown",
+                primary_confidence=0.0
+            )
+            
+        try:
+            img_pil = PILImage.open(image_path).convert("RGB")
+            image = preprocess(img_pil).unsqueeze(0).to(device)
+            
+            # Use half precision on GPU/MPS for efficiency
+            if device in ["cuda", "mps"]:
+                try:
+                    image = image.half()
+                except Exception:
+                    pass
+            
+            with torch.no_grad():
+                text_features = SpeciesClassifierService._get_text_features(model, tokenizer, device)
                 
-                clf = model_dict["classifier"]
-                species_list = model_dict["species_list"]
+                image_features = model.encode_image(image)
+                image_features /= image_features.norm(dim=-1, keepdim=True)
                 
-                probs = clf.predict_proba([features])[0]
-                top_indices = np.argsort(probs)[::-1]
+                # Cosine similarity as logits
+                similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)
+                probabilities = similarity[0]
                 
-                primary_idx = top_indices[0]
-                primary_species = species_list[primary_idx]
-                primary_confidence = float(probs[primary_idx])
+            top_prob, top_indices = torch.topk(probabilities, min(top_k, len(SpeciesClassifierService.SPECIES_LIST)))
+            
+            predictions = []
+            for i in range(top_indices.size(0)):
+                idx = top_indices[i].item()
+                prob = top_prob[i].item()
+                species = SpeciesClassifierService.SPECIES_LIST[idx]
+                predictions.append(SpeciesPrediction(species, prob))
                 
-                alternatives = []
-                for idx in top_indices[1:top_k]:
-                    alternatives.append(SpeciesPrediction(
-                        species=species_list[idx],
-                        confidence=float(probs[idx])
-                    ))
+            if not predictions:
+                predictions.append(SpeciesPrediction("Other / Unknown", 0.0))
                 
-                is_tiger = primary_species == "Bengal Tiger"
-                passes_threshold = primary_confidence >= settings.SPECIESNET_CONFIDENCE_THRESHOLD
-                if primary_confidence >= settings.HIGH_CONFIDENCE_THRESHOLD:
-                    confidence_level = "high"
-                elif primary_confidence >= settings.MEDIUM_CONFIDENCE_THRESHOLD:
-                    confidence_level = "medium"
-                else:
-                    confidence_level = "low"
-                
-                requires_human_review = not passes_threshold or (is_tiger and confidence_level != "high")
-                
-                return SpeciesClassificationResult(
-                    detection_id=detection_id,
-                    primary_species=primary_species,
-                    primary_confidence=primary_confidence,
-                    alternatives=alternatives,
-                    is_tiger=is_tiger,
-                    model_name="speciesnet_random_forest_v1",
-                    processing_time_ms=(time.time() - start_time) * 1000,
-                    passes_threshold=passes_threshold,
-                    confidence_level=confidence_level,
-                    requires_human_review=requires_human_review
-                )
-            except Exception as e:
-                print(f"Error classifying with pickle model: {e}. Falling back to default simulation.")
-
-        # Seed RNG for deterministic results (Fallback)
-        seed = SpeciesClassifierService._get_seed(image_path or "empty", detection_id)
-        rng = random.Random(seed)
-
-        # Select primary species using weighted distribution
-        species_list = list(SPECIES_POOL.keys())
-        weights = list(SPECIES_POOL.values())
-        primary_species = rng.choices(species_list, weights=weights, k=1)[0]
-
-        # Generate primary confidence
-        if primary_species == "Bengal Tiger":
-            primary_confidence = rng.uniform(0.60, 0.98)
-        elif primary_species == "Indian Leopard":
-            primary_confidence = rng.uniform(0.55, 0.95)
-        else:
-            primary_confidence = rng.uniform(0.70, 0.97)
-
-        # Generate alternative predictions
-        alternatives = SpeciesClassifierService._generate_alternatives(
-            rng, primary_species, primary_confidence, top_k - 1
-        )
-
-        is_tiger = primary_species == "Bengal Tiger"
-        passes_threshold = primary_confidence >= settings.SPECIESNET_CONFIDENCE_THRESHOLD
-        if primary_confidence >= settings.HIGH_CONFIDENCE_THRESHOLD:
+        except Exception as e:
+            print(f"Classification error: {e}")
+            predictions = [SpeciesPrediction("Error", 0.0)]
+            
+        primary = predictions[0]
+        alternatives = predictions[1:]
+        
+        is_tiger = "Tiger" in primary.species
+        
+        passes_threshold = primary.confidence >= settings.SPECIESNET_CONFIDENCE_THRESHOLD
+        
+        if primary.confidence >= settings.HIGH_CONFIDENCE_THRESHOLD:
             confidence_level = "high"
-        elif primary_confidence >= settings.MEDIUM_CONFIDENCE_THRESHOLD:
+            requires_review = False
+        elif primary.confidence >= settings.LOW_CONFIDENCE_THRESHOLD:
             confidence_level = "medium"
+            requires_review = True
         else:
             confidence_level = "low"
+            requires_review = True
 
-        requires_human_review = not passes_threshold or (is_tiger and confidence_level != "high")
-        simulated_time = rng.uniform(150, 500)
+        processing_time = (time.time() - start_time) * 1000
 
         return SpeciesClassificationResult(
             detection_id=detection_id,
-            primary_species=primary_species,
-            primary_confidence=primary_confidence,
+            primary_species=primary.species,
+            primary_confidence=primary.confidence,
             alternatives=alternatives,
             is_tiger=is_tiger,
-            model_name="speciesnet_v1_simulated",
-            processing_time_ms=simulated_time,
+            model_name="openclip_vit_b32_zeroshot",
+            processing_time_ms=processing_time,
             passes_threshold=passes_threshold,
             confidence_level=confidence_level,
-            requires_human_review=requires_human_review
+            requires_human_review=requires_review,
         )
-
-    @staticmethod
-    def classify_with_tiger_bias(
-        image_path: str,
-        detection_id: str = "",
-        top_k: int = 5,
-    ) -> SpeciesClassificationResult:
-        """
-        Classify with higher probability of tiger detection.
-        Used for demo/testing purposes.
-        """
-        seed = SpeciesClassifierService._get_seed(image_path, detection_id)
-        rng = random.Random(seed)
-
-        # Use tiger confusion matrix for more tiger results
-        species_list = list(TIGER_CONFUSION.keys())
-        weights = list(TIGER_CONFUSION.values())
-        primary_species = rng.choices(species_list, weights=weights, k=1)[0]
-
-        if primary_species == "Other":
-            # Pick from general pool excluding big cats
-            other_species = [s for s in SPECIES_POOL.keys()
-                           if s not in ["Bengal Tiger", "Indian Leopard", "Jungle Cat"]]
-            primary_species = rng.choice(other_species)
-
-        primary_confidence = rng.uniform(0.65, 0.98)
-
-        alternatives = SpeciesClassifierService._generate_alternatives(
-            rng, primary_species, primary_confidence, top_k - 1
-        )
-
-        is_tiger = primary_species == "Bengal Tiger"
-
-        return SpeciesClassificationResult(
-            detection_id=detection_id,
-            primary_species=primary_species,
-            primary_confidence=primary_confidence,
-            alternatives=alternatives,
-            is_tiger=is_tiger,
-            processing_time_ms=rng.uniform(150, 500),
-        )
-
-    @staticmethod
-    def _generate_alternatives(
-        rng: random.Random,
-        primary_species: str,
-        primary_confidence: float,
-        num_alternatives: int,
-    ) -> List[SpeciesPrediction]:
-        """Generate alternative species predictions"""
-        alternatives = []
-        remaining_confidence = 1.0 - primary_confidence
-
-        # Get other species (excluding primary)
-        other_species = [s for s in SPECIES_POOL.keys() if s != primary_species]
-        rng.shuffle(other_species)
-
-        for i, species in enumerate(other_species[:num_alternatives]):
-            if i == num_alternatives - 1:
-                # Last alternative gets remaining confidence
-                conf = remaining_confidence
-            else:
-                # Distribute remaining confidence
-                conf = remaining_confidence * rng.uniform(0.2, 0.6)
-                remaining_confidence -= conf
-
-            alternatives.append(SpeciesPrediction(
-                species=species,
-                confidence=max(0.001, conf),
-            ))
-
-        # Sort by confidence descending
-        alternatives.sort(key=lambda p: p.confidence, reverse=True)
-        return alternatives
-
-    @staticmethod
-    def _get_seed(image_path: str, detection_id: str) -> int:
-        """Generate deterministic seed"""
-        seed_str = f"speciesnet_{image_path}_{detection_id}"
-        return int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16)

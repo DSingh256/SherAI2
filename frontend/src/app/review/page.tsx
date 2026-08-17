@@ -5,69 +5,45 @@ import { CheckCircle, Search, Filter, RefreshCw, BarChart2, ShieldCheck, Sparkle
 import { ReviewQueue } from "@/components/review/ReviewQueue";
 import { ReviewCard } from "@/components/review/ReviewCard";
 
-const initialMockQueue = [
-  {
-    image_id: "val-img-001",
-    camera_id: "CAM007_Waterhole_Alpha",
-    timestamp: "2026-08-17 18:45:22",
-    ai_prediction: "Indian Leopard",
-    confidence: 0.68,
-    confidence_level: "medium",
-    decision: "human_review",
-    reasoning: [
-      "✓ MegaDetector detected animal with 94.2% confidence",
-      "✓ SpeciesNet predicts Indian Leopard at 68.0%",
-      "⚠ OpenCLIP predicts Jungle Cat at 65.0% (Disagreement)",
-      "✓ Human verification recommended before cataloging",
-    ],
-    image_path: "storage/raw/img_001.jpg",
-    is_tiger: false,
-  },
-  {
-    image_id: "val-img-002",
-    camera_id: "CAM012_Tiger_Corridor_East",
-    timestamp: "2026-08-17 03:15:00",
-    ai_prediction: "Bengal Tiger",
-    confidence: 0.74,
-    confidence_level: "medium",
-    decision: "human_review",
-    reasoning: [
-      "✓ MegaDetector detected animal with 98.5% confidence",
-      "✓ SpeciesNet predicts Bengal Tiger at 74.0%",
-      "✓ OpenCLIP confirms Bengal Tiger similarity (82.1%)",
-      "🐅 TIGER DETECTION — Priority 1 tracking and alert activated",
-    ],
-    image_path: "storage/raw/img_002.jpg",
-    is_tiger: true,
-  },
-  {
-    image_id: "val-img-003",
-    camera_id: "CAM022_Buffer_Zone_Village",
-    timestamp: "2026-08-17 22:10:05",
-    ai_prediction: "Wild Boar",
-    confidence: 0.58,
-    confidence_level: "low",
-    decision: "uncertain",
-    reasoning: [
-      "✓ MegaDetector detected animal with 78.0% confidence",
-      "⚠ SpeciesNet confidence only 58.0%",
-      "⚠ Poor night illumination / motion blur",
-    ],
-    image_path: "storage/raw/img_003.jpg",
-    is_tiger: false,
-  },
-];
 
 export default function ReviewPage() {
-  const [queue, setQueue] = useState(initialMockQueue);
-  const [selectedId, setSelectedId] = useState(initialMockQueue[0]?.image_id || "");
+  const [queue, setQueue] = useState<any[]>([]);
+  const [selectedId, setSelectedId] = useState("");
   const [filterSpecies, setFilterSpecies] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [stats, setStats] = useState({
-    verifiedToday: 18,
-    agreementRate: 88.5,
-    pending: initialMockQueue.length,
+    verifiedToday: 0,
+    agreementRate: 0,
+    pending: 0,
   });
+
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/api/review/queue")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.data?.items) {
+          setQueue(data.data.items);
+          if (data.data.items.length > 0) {
+            setSelectedId(data.data.items[0].image_id);
+          }
+          setStats((s) => ({ ...s, pending: data.data.items.length }));
+        }
+      })
+      .catch((err) => console.error("Error fetching queue:", err));
+      
+    fetch("http://127.0.0.1:8000/api/review/stats")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.data) {
+          setStats((s) => ({
+            ...s,
+            verifiedToday: data.data.human_reviewed_today || 0,
+            agreementRate: data.data.ai_human_agreement_rate || 0,
+          }));
+        }
+      })
+      .catch((err) => console.error("Error fetching stats:", err));
+  }, []);
 
   const selectedItem = queue.find((i) => i.image_id === selectedId) || queue[0];
 
@@ -94,7 +70,7 @@ export default function ReviewPage() {
 
       // Optimistic background sync to backend
       try {
-        await fetch("/api/review/submit", {
+        await fetch("http://127.0.0.1:8000/api/review/submit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

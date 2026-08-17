@@ -227,8 +227,7 @@ class ProcessingPipeline:
                     if settings.ENABLE_OPENCLIP:
                         logger.info(f"[{image_id}] Stage 4: OpenCLIP")
                         verify_result = SemanticVerifierService.verify(
-                            image.image_path, image_id,
-                            speciesnet_prediction, speciesnet_conf
+                            det_record.crop_path, speciesnet_prediction, image_id
                         )
                         result.semantic_verification = verify_result
                         

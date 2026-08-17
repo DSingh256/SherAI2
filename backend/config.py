@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     # Model Configuration
     MEGADETECTOR_CONFIDENCE_THRESHOLD: float = 0.5
     SPECIESNET_CONFIDENCE_THRESHOLD: float = 0.5
+    SEMANTIC_CONFIDENCE_THRESHOLD: float = 0.5
 
     # Feature Flags
     ENABLE_MEGADETECTOR: bool = True
