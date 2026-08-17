@@ -10,7 +10,7 @@ import time
 import uuid
 import logging
 
-from db.models import Image, Detection, Classification, Decision, AuditTrail, TigerReidentification, Verification, Segmentation
+from db.models import Image, Detection, Classification, Decision, AuditTrail, TigerReidentification, Verification, Segmentation, Alert
 from db.schemas import DecisionSignals
 from config import settings
 
@@ -315,6 +315,27 @@ class ProcessingPipeline:
                 is_tiger=decision_result.is_tiger
             )
             db.add(decision_record)
+            
+            # Create high-priority alert if priority species (tiger/leopard/elephant)
+            if decision_result.is_priority_species:
+                alert_type = "tiger_sighting" if decision_result.is_tiger else "priority_species_sighting"
+                alert_severity = "high" if decision_result.is_tiger else "medium"
+                alert = Alert(
+                    id=str(uuid.uuid4()),
+                    alert_type=alert_type,
+                    severity=alert_severity,
+                    title=f"Priority Wildlife Sighting: {decision_result.species}",
+                    message=f"Detected {decision_result.species} with {decision_result.confidence:.1%} confidence on camera {image.camera_id}",
+                    camera_id=image.camera_id,
+                    image_id=image_id,
+                    details={
+                        "species": decision_result.species,
+                        "confidence": decision_result.confidence,
+                        "routing": decision_result.routing_destination.value,
+                        "processing_id": decision_result.processing_id
+                    }
+                )
+                db.add(alert)
             
             # ==========================================
             # STAGE 7: EXPLAINABILITY
