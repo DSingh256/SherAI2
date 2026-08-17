@@ -51,6 +51,9 @@ TIGER_CONFUSION = {
 }
 
 
+from config import settings
+
+
 @dataclass
 class SpeciesPrediction:
     """A single species prediction with confidence"""
@@ -74,6 +77,9 @@ class SpeciesClassificationResult:
     is_tiger: bool = False
     model_name: str = "speciesnet_v1_simulated"
     processing_time_ms: float = 0.0
+    passes_threshold: bool = True
+    confidence_level: str = "high"
+    requires_human_review: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -84,6 +90,9 @@ class SpeciesClassificationResult:
             "is_tiger": self.is_tiger,
             "model_name": self.model_name,
             "processing_time_ms": round(self.processing_time_ms, 2),
+            "passes_threshold": self.passes_threshold,
+            "confidence_level": self.confidence_level,
+            "requires_human_review": self.requires_human_review,
         }
 
     @property
@@ -101,6 +110,45 @@ class SpeciesClassifierService:
     Simulated mode generates realistic species predictions
     for Indian wildlife based on image characteristics.
     """
+
+    @staticmethod
+    def preprocess_image(image_path: str) -> Optional[List[float]]:
+        """
+        Validates and preprocesses an image crop into standardized feature vector.
+        Standardizes to 224x224 RGB image representation and extracts:
+        [mean_r, mean_g, mean_b, std_r, std_g, std_b, contrast, brightness, width, height, aspect_ratio]
+        """
+        if not image_path or not os.path.exists(image_path):
+            return None
+        
+        try:
+            img_pil = PILImage.open(image_path)
+            w, h = img_pil.size
+            aspect_ratio = float(w) / float(h) if h > 0 else 1.0
+            
+            # Standardize crop size for feature consistency
+            resized = img_pil.resize((224, 224), PILImage.BILINEAR)
+            img_rgb = np.array(resized.convert("RGB"))
+            
+            mean_r = float(np.mean(img_rgb[:, :, 0]))
+            mean_g = float(np.mean(img_rgb[:, :, 1]))
+            mean_b = float(np.mean(img_rgb[:, :, 2]))
+            std_r = float(np.std(img_rgb[:, :, 0]))
+            std_g = float(np.std(img_rgb[:, :, 1]))
+            std_b = float(np.std(img_rgb[:, :, 2]))
+            
+            gray = np.mean(img_rgb, axis=2)
+            brightness = float(np.mean(gray))
+            contrast = float(np.std(gray))
+            
+            return [
+                mean_r, mean_g, mean_b,
+                std_r, std_g, std_b,
+                contrast, brightness,
+                float(w), float(h), aspect_ratio
+            ]
+        except Exception:
+            return None
 
     @staticmethod
     def classify(
@@ -121,49 +169,17 @@ class SpeciesClassifierService:
         """
         start_time = time.time()
 
-        # Check if pickled model exists
+        # 1. Preprocessing & Input Validation
+        features = SpeciesClassifierService.preprocess_image(image_path)
+
+        # 2. Check if pickled model exists
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         pkl_path = os.path.join(base_dir, "models", "speciesnet.pkl")
         if not os.path.exists(pkl_path):
             pkl_path = os.path.join("models", "speciesnet.pkl")
 
-        if os.path.exists(pkl_path):
+        if features is not None and os.path.exists(pkl_path):
             try:
-                # Extract image crop features
-                # Features: [mean_r, mean_g, mean_b, std_r, std_g, std_b, contrast, brightness, width, height, aspect_ratio]
-                img_pil = PILImage.open(image_path)
-                w, h = img_pil.size
-                aspect_ratio = w / h if h > 0 else 1.0
-                
-                # Load with cv2 for brightness/contrast calculations
-                img_cv = cv2.imread(image_path)
-                if img_cv is not None:
-                    # Convert BGR to RGB
-                    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
-                    mean_r = np.mean(img_rgb[:, :, 0])
-                    mean_g = np.mean(img_rgb[:, :, 1])
-                    mean_b = np.mean(img_rgb[:, :, 2])
-                    std_r = np.std(img_rgb[:, :, 0])
-                    std_g = np.std(img_rgb[:, :, 1])
-                    std_b = np.std(img_rgb[:, :, 2])
-                    
-                    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-                    brightness = np.mean(gray)
-                    contrast = np.std(gray)
-                else:
-                    # Fallback to random features based on file path if cv2 fails to read
-                    mean_r, mean_g, mean_b = 120, 110, 100
-                    std_r, std_g, std_b = 20, 20, 20
-                    brightness, contrast = 110, 25
-
-                features = [
-                    mean_r, mean_g, mean_b, 
-                    std_r, std_g, std_b, 
-                    contrast, brightness, 
-                    float(w), float(h), aspect_ratio
-                ]
-                
-                # Unpickle model
                 with open(pkl_path, "rb") as f:
                     model_dict = pickle.load(f)
                 
@@ -171,8 +187,6 @@ class SpeciesClassifierService:
                 species_list = model_dict["species_list"]
                 
                 probs = clf.predict_proba([features])[0]
-                
-                # Get indices sorted descending by probability
                 top_indices = np.argsort(probs)[::-1]
                 
                 primary_idx = top_indices[0]
@@ -187,6 +201,15 @@ class SpeciesClassifierService:
                     ))
                 
                 is_tiger = primary_species == "Bengal Tiger"
+                passes_threshold = primary_confidence >= settings.SPECIESNET_CONFIDENCE_THRESHOLD
+                if primary_confidence >= settings.HIGH_CONFIDENCE_THRESHOLD:
+                    confidence_level = "high"
+                elif primary_confidence >= settings.MEDIUM_CONFIDENCE_THRESHOLD:
+                    confidence_level = "medium"
+                else:
+                    confidence_level = "low"
+                
+                requires_human_review = not passes_threshold or (is_tiger and confidence_level != "high")
                 
                 return SpeciesClassificationResult(
                     detection_id=detection_id,
@@ -195,13 +218,16 @@ class SpeciesClassifierService:
                     alternatives=alternatives,
                     is_tiger=is_tiger,
                     model_name="speciesnet_random_forest_v1",
-                    processing_time_ms=(time.time() - start_time) * 1000
+                    processing_time_ms=(time.time() - start_time) * 1000,
+                    passes_threshold=passes_threshold,
+                    confidence_level=confidence_level,
+                    requires_human_review=requires_human_review
                 )
             except Exception as e:
                 print(f"Error classifying with pickle model: {e}. Falling back to default simulation.")
 
-        # Seed RNG for deterministic results
-        seed = SpeciesClassifierService._get_seed(image_path, detection_id)
+        # Seed RNG for deterministic results (Fallback)
+        seed = SpeciesClassifierService._get_seed(image_path or "empty", detection_id)
         rng = random.Random(seed)
 
         # Select primary species using weighted distribution
@@ -210,7 +236,6 @@ class SpeciesClassifierService:
         primary_species = rng.choices(species_list, weights=weights, k=1)[0]
 
         # Generate primary confidence
-        # Tigers and large cats get more varied confidence for interesting demo scenarios
         if primary_species == "Bengal Tiger":
             primary_confidence = rng.uniform(0.60, 0.98)
         elif primary_species == "Indian Leopard":
@@ -223,10 +248,16 @@ class SpeciesClassifierService:
             rng, primary_species, primary_confidence, top_k - 1
         )
 
-        # Determine if this is a tiger
         is_tiger = primary_species == "Bengal Tiger"
+        passes_threshold = primary_confidence >= settings.SPECIESNET_CONFIDENCE_THRESHOLD
+        if primary_confidence >= settings.HIGH_CONFIDENCE_THRESHOLD:
+            confidence_level = "high"
+        elif primary_confidence >= settings.MEDIUM_CONFIDENCE_THRESHOLD:
+            confidence_level = "medium"
+        else:
+            confidence_level = "low"
 
-        processing_time = (time.time() - start_time) * 1000
+        requires_human_review = not passes_threshold or (is_tiger and confidence_level != "high")
         simulated_time = rng.uniform(150, 500)
 
         return SpeciesClassificationResult(
@@ -235,7 +266,11 @@ class SpeciesClassifierService:
             primary_confidence=primary_confidence,
             alternatives=alternatives,
             is_tiger=is_tiger,
+            model_name="speciesnet_v1_simulated",
             processing_time_ms=simulated_time,
+            passes_threshold=passes_threshold,
+            confidence_level=confidence_level,
+            requires_human_review=requires_human_review
         )
 
     @staticmethod
