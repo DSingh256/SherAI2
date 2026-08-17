@@ -2,7 +2,7 @@
 VanRakshak AI - Database Setup and Session Management
 """
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 from config import settings
@@ -66,7 +66,7 @@ def health_check():
     """Test database connection"""
     try:
         with get_db_context() as db:
-            db.execute("SELECT 1")
+            db.execute(text("SELECT 1"))
         return True
     except Exception as e:
         print(f"✗ Database connection failed: {e}")

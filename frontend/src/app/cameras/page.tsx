@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera, Settings, Activity } from "lucide-react";
+import { Settings } from "lucide-react";
 
 const cameras = [
   { id: "CAM001", name: "North Gate", status: "offline", battery: "0%", images: 1240, lastActive: "1 day ago" },

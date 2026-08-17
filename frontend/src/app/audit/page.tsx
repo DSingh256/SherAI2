@@ -1,6 +1,6 @@
 "use client";
 
-import { History, ShieldCheck, User } from "lucide-react";
+import { ShieldCheck, User } from "lucide-react";
 
 export default function AuditTrail() {
   return (

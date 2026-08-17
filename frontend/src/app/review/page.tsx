@@ -1,232 +1,210 @@
 "use client";
 
-import { useState } from "react";
-import { Check, X, AlertTriangle, Search, Filter } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import { CheckCircle, Search, Filter, RefreshCw, BarChart2, ShieldCheck, Sparkles } from "lucide-react";
+import { ReviewQueue } from "@/components/review/ReviewQueue";
+import { ReviewCard } from "@/components/review/ReviewCard";
 
-// Mock data for review queue
-const mockQueue = [
+const initialMockQueue = [
   {
-    id: "img_001",
-    camera: "CAM007 (Waterhole Alpha)",
-    timestamp: "2024-03-10 18:45:22",
-    prediction: "Indian Leopard",
+    image_id: "val-img-001",
+    camera_id: "CAM007_Waterhole_Alpha",
+    timestamp: "2026-08-17 18:45:22",
+    ai_prediction: "Indian Leopard",
+    confidence: 0.68,
+    confidence_level: "medium",
+    decision: "human_review",
+    reasoning: [
+      "✓ MegaDetector detected animal with 94.2% confidence",
+      "✓ SpeciesNet predicts Indian Leopard at 68.0%",
+      "⚠ OpenCLIP predicts Jungle Cat at 65.0% (Disagreement)",
+      "✓ Human verification recommended before cataloging",
+    ],
+    image_path: "storage/raw/img_001.jpg",
+    is_tiger: false,
+  },
+  {
+    image_id: "val-img-002",
+    camera_id: "CAM012_Tiger_Corridor_East",
+    timestamp: "2026-08-17 03:15:00",
+    ai_prediction: "Bengal Tiger",
+    confidence: 0.74,
+    confidence_level: "medium",
+    decision: "human_review",
+    reasoning: [
+      "✓ MegaDetector detected animal with 98.5% confidence",
+      "✓ SpeciesNet predicts Bengal Tiger at 74.0%",
+      "✓ OpenCLIP confirms Bengal Tiger similarity (82.1%)",
+      "🐅 TIGER DETECTION — Priority 1 tracking and alert activated",
+    ],
+    image_path: "storage/raw/img_002.jpg",
+    is_tiger: true,
+  },
+  {
+    image_id: "val-img-003",
+    camera_id: "CAM022_Buffer_Zone_Village",
+    timestamp: "2026-08-17 22:10:05",
+    ai_prediction: "Wild Boar",
     confidence: 0.58,
+    confidence_level: "low",
+    decision: "uncertain",
     reasoning: [
-      "✓ Animal detected with 92% confidence",
-      "⚠ SpeciesNet predicts Indian Leopard at 58%",
-      "⚠ OpenCLIP disagrees — predicts Jungle Cat",
-      "✓ Models show low agreement — verification recommended"
+      "✓ MegaDetector detected animal with 78.0% confidence",
+      "⚠ SpeciesNet confidence only 58.0%",
+      "⚠ Poor night illumination / motion blur",
     ],
-    image: "https://images.unsplash.com/photo-1544641957-3f360c497424?w=800&q=80"
+    image_path: "storage/raw/img_003.jpg",
+    is_tiger: false,
   },
-  {
-    id: "img_002",
-    camera: "CAM012 (Tiger Trail East)",
-    timestamp: "2024-03-10 03:15:00",
-    prediction: "Bengal Tiger",
-    confidence: 0.72,
-    reasoning: [
-      "✓ Animal detected with 98% confidence",
-      "✓ SpeciesNet predicts Bengal Tiger at 72%",
-      "⚠ Night vision image quality is acceptable",
-      "⚠ Unusual activity time (03:00) for Tiger"
-    ],
-    image: "https://images.unsplash.com/photo-1579753767215-6217435f3032?w=800&q=80"
-  },
-  {
-    id: "img_003",
-    camera: "CAM022 (Village Border)",
-    timestamp: "2024-03-09 22:10:05",
-    prediction: "Human",
-    confidence: 0.65,
-    reasoning: [
-      "✓ Human detected with 85% confidence",
-      "⚠ Activity detected at unusual hour (22:00)",
-      "⚠ Human activity in restricted zone"
-    ],
-    image: "https://images.unsplash.com/photo-1534067783941-51c9c23ecefd?w=800&q=80"
-  }
 ];
 
-export default function ReviewQueue() {
-  const [queue, setQueue] = useState(mockQueue);
-  const [selectedImage, setSelectedImage] = useState(mockQueue[0]);
+export default function ReviewPage() {
+  const [queue, setQueue] = useState(initialMockQueue);
+  const [selectedId, setSelectedId] = useState(initialMockQueue[0]?.image_id || "");
+  const [filterSpecies, setFilterSpecies] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [stats, setStats] = useState({
+    verifiedToday: 18,
+    agreementRate: 88.5,
+    pending: initialMockQueue.length,
+  });
 
-  const handleDecision = (id: string, decision: string) => {
-    // In a real app, this would POST to /api/review/submit
-    const newQueue = queue.filter(item => item.id !== id);
-    setQueue(newQueue);
-    if (newQueue.length > 0) {
-      setSelectedImage(newQueue[0]);
-    } else {
-      // @ts-expect-error - Next.js state update for null vs mockQueue type
-      setSelectedImage(null);
-    }
-  };
+  const selectedItem = queue.find((i) => i.image_id === selectedId) || queue[0];
+
+  const handleAction = useCallback(
+    async (action: string, humanPrediction?: string, notes?: string) => {
+      if (!selectedItem) return;
+
+      const currentIdx = queue.findIndex((i) => i.image_id === selectedItem.image_id);
+      const nextQueue = queue.filter((i) => i.image_id !== selectedItem.image_id);
+
+      setQueue(nextQueue);
+      setStats((s) => ({
+        ...s,
+        verifiedToday: s.verifiedToday + 1,
+        pending: Math.max(0, s.pending - 1),
+      }));
+
+      if (nextQueue.length > 0) {
+        const nextItem = nextQueue[currentIdx] || nextQueue[0];
+        setSelectedId(nextItem.image_id);
+      } else {
+        setSelectedId("");
+      }
+
+      // Optimistic background sync to backend
+      try {
+        await fetch("/api/review/submit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image_id: selectedItem.image_id,
+            reviewer_id: "Field Biologist",
+            action: action.toUpperCase(),
+            human_prediction: humanPrediction,
+            notes: notes,
+          }),
+        });
+      } catch (err) {
+        console.warn("Review sync warning:", err);
+      }
+    },
+    [queue, selectedItem]
+  );
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Avoid firing when typing in an input
+      if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+
+      if (e.key === "a" || e.key === "A") {
+        e.preventDefault();
+        handleAction("ACCEPT");
+      } else if (e.key === "r" || e.key === "R") {
+        e.preventDefault();
+        handleAction("REJECT");
+      } else if (e.key === "c" || e.key === "C") {
+        e.preventDefault();
+        handleAction("CORRECT");
+      } else if (e.key === "e" || e.key === "E") {
+        e.preventDefault();
+        handleAction("ESCALATE");
+      } else if (e.key === "ArrowDown" || e.key === "]") {
+        e.preventDefault();
+        const curIdx = queue.findIndex((i) => i.image_id === selectedId);
+        if (curIdx < queue.length - 1) setSelectedId(queue[curIdx + 1].image_id);
+      } else if (e.key === "ArrowUp" || e.key === "[") {
+        e.preventDefault();
+        const curIdx = queue.findIndex((i) => i.image_id === selectedId);
+        if (curIdx > 0) setSelectedId(queue[curIdx - 1].image_id);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleAction, queue, selectedId]);
 
   return (
-    <div className="space-y-6 h-[calc(100vh-8rem)] flex flex-col">
-      <header className="flex justify-between items-end mb-2">
+    <div className="space-y-4 h-[calc(100vh-7.5rem)] flex flex-col">
+      {/* Top Header & Stats Strip */}
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Review Queue</h1>
-          <p className="text-foreground/70">Human verification for uncertain AI classifications.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+            <ShieldCheck className="text-primary-400" size={24} />
+            Human-in-the-Loop Review
+          </h1>
+          <p className="text-xs text-foreground/70">
+            Expert verification & ground-truth feedback for uncertain wildlife detections
+          </p>
         </div>
-        <div className="flex gap-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground/50" size={16} />
-            <input 
-              type="text" 
-              placeholder="Search ID or camera..." 
-              className="pl-10 pr-4 py-2 rounded-lg text-sm w-64"
-            />
+
+        {/* Live Metrics */}
+        <div className="flex items-center gap-4 text-xs font-mono">
+          <div className="px-3 py-1.5 rounded-lg bg-surface-200 border border-white/5 flex items-center gap-2">
+            <span className="text-foreground/60">Verified Today:</span>
+            <span className="font-semibold text-emerald-400">{stats.verifiedToday}</span>
           </div>
-          <button className="glass-card px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-surface-200 transition-colors">
-            <Filter size={16} />
-            <span className="text-sm font-medium">Filter</span>
-          </button>
+          <div className="px-3 py-1.5 rounded-lg bg-surface-200 border border-white/5 flex items-center gap-2">
+            <span className="text-foreground/60">AI Agreement:</span>
+            <span className="font-semibold text-primary-400">{stats.agreementRate}%</span>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+            <span className="text-amber-300/80">Pending Queue:</span>
+            <span className="font-bold text-amber-300">{queue.length}</span>
+          </div>
         </div>
       </header>
 
+      {/* Main Review Workspace */}
       {queue.length === 0 ? (
-        <div className="flex-1 glass-card rounded-xl flex flex-col items-center justify-center text-center">
-          <div className="w-16 h-16 rounded-full bg-success/20 flex items-center justify-center text-success mb-4">
-            <Check size={32} />
+        <div className="flex-1 rounded-xl border border-white/10 bg-surface-100/50 flex flex-col items-center justify-center text-center p-8">
+          <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mb-4">
+            <CheckCircle size={36} />
           </div>
-          <h2 className="text-xl font-bold text-white mb-2">All Caught Up!</h2>
-          <p className="text-foreground/60 max-w-md">
-            The review queue is empty. The AI is confident in all recent classifications.
+          <h2 className="text-xl font-bold text-white mb-2">Queue Fully Verified!</h2>
+          <p className="text-xs text-foreground/60 max-w-sm">
+            All pending camera-trap captures have been inspected. Autonomous pipeline is monitoring live camera traps.
           </p>
         </div>
       ) : (
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
-          {/* Queue List */}
-          <div className="glass-card rounded-xl overflow-hidden flex flex-col border border-white/5">
-            <div className="p-4 border-b border-white/5 bg-surface-100/50">
-              <h3 className="font-medium text-white flex justify-between">
-                <span>Pending Verification</span>
-                <span className="bg-warning/20 text-warning px-2 py-0.5 rounded text-xs">{queue.length}</span>
-              </h3>
-            </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-2">
-              {queue.map(item => (
-                <div 
-                  key={item.id}
-                  onClick={() => setSelectedImage(item)}
-                  className={`p-3 rounded-lg cursor-pointer transition-colors ${
-                    selectedImage?.id === item.id 
-                      ? "bg-primary-900/40 border border-primary-500/30" 
-                      : "hover:bg-surface-200 border border-transparent"
-                  }`}
-                >
-                  <div className="flex justify-between items-start mb-1">
-                    <span className="text-xs font-mono text-foreground/50">{item.id}</span>
-                    <span className={`text-xs px-1.5 py-0.5 rounded ${
-                      item.prediction === 'Bengal Tiger' ? 'bg-accent-500/20 text-accent-400' :
-                      item.prediction === 'Human' ? 'bg-danger/20 text-danger' :
-                      'bg-surface-200 text-foreground/70'
-                    }`}>
-                      {item.prediction} ({(item.confidence * 100).toFixed(0)}%)
-                    </span>
-                  </div>
-                  <div className="font-medium text-sm text-white truncate">{item.camera}</div>
-                  <div className="text-xs text-foreground/60 mt-1">{item.timestamp}</div>
-                </div>
-              ))}
-            </div>
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4 min-h-0">
+          {/* Left Column: Queue List */}
+          <div className="lg:col-span-1 min-h-0">
+            <ReviewQueue
+              items={queue}
+              selectedId={selectedId}
+              onSelect={(item) => setSelectedId(item.image_id)}
+              filterSpecies={filterSpecies}
+              setFilterSpecies={setFilterSpecies}
+            />
           </div>
 
-          {/* Review Panel */}
-          <div className="lg:col-span-2 glass-card rounded-xl overflow-hidden flex flex-col border border-white/5 relative">
-            {selectedImage && (
-              <>
-                <div className="h-2/5 bg-surface-200 relative group">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img 
-                    src={selectedImage.image} 
-                    alt="Camera trap capture" 
-                    className="w-full h-full object-contain"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-4">
-                    <div className="text-white text-xs">
-                      <span className="opacity-70">Raw Path:</span> /storage/raw/img_{selectedImage.id}.jpg
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="flex-1 p-6 flex flex-col overflow-y-auto">
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <h2 className="text-2xl font-bold text-white mb-1">AI Prediction: {selectedImage.prediction}</h2>
-                      <div className="flex gap-4 text-sm text-foreground/60">
-                        <span>{selectedImage.camera}</span>
-                        <span>•</span>
-                        <span>{selectedImage.timestamp}</span>
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end">
-                      <div className="text-3xl font-light text-primary-400">
-                        {(selectedImage.confidence * 100).toFixed(1)}<span className="text-lg text-primary-400/50">%</span>
-                      </div>
-                      <span className="text-xs text-foreground/50 uppercase tracking-wider">Confidence</span>
-                    </div>
-                  </div>
-
-                  <div className="mb-6">
-                    <h3 className="text-sm font-medium text-foreground/70 uppercase tracking-wider mb-3">AI Reasoning</h3>
-                    <div className="space-y-2 bg-surface-100 rounded-lg p-4 border border-white/5">
-                      {selectedImage.reasoning.map((reason, idx) => (
-                        <div key={idx} className="flex gap-2 text-sm">
-                          <span className={
-                            reason.startsWith('✓') ? 'text-success' : 
-                            reason.startsWith('⚠') ? 'text-warning' : 'text-danger'
-                          }>
-                            {reason.charAt(0)}
-                          </span>
-                          <span className="text-foreground/80">{reason.substring(2)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="mt-auto border-t border-white/10 pt-6">
-                    <h3 className="text-sm font-medium text-foreground/70 uppercase tracking-wider mb-4">Human Verification</h3>
-                    
-                    <div className="flex gap-3 mb-4">
-                      <select className="flex-1 p-3 rounded-lg text-sm bg-surface-100 border border-white/10 text-white">
-                        <option value={selectedImage.prediction}>Confirm: {selectedImage.prediction}</option>
-                        <option value="Bengal Tiger">Correct to: Bengal Tiger</option>
-                        <option value="Indian Leopard">Correct to: Indian Leopard</option>
-                        <option value="Wild Boar">Correct to: Wild Boar</option>
-                        <option value="Human">Correct to: Human (Poacher/Patrol)</option>
-                        <option value="Vehicle">Correct to: Vehicle</option>
-                        <option value="Empty">Correct to: Empty (False Alarm)</option>
-                      </select>
-                      
-                      <input 
-                        type="text" 
-                        placeholder="Add review notes (optional)..." 
-                        className="flex-1 p-3 rounded-lg text-sm"
-                      />
-                    </div>
-                    
-                    <div className="flex gap-3">
-                      <button 
-                        onClick={() => handleDecision(selectedImage.id, "confirm")}
-                        className="flex-1 bg-primary-600 hover:bg-primary-500 text-white py-3 rounded-lg font-medium transition-colors flex justify-center items-center gap-2"
-                      >
-                        <Check size={18} /> Confirm Classification
-                      </button>
-                      <button 
-                        onClick={() => handleDecision(selectedImage.id, "reject")}
-                        className="px-6 bg-surface-200 hover:bg-danger/20 hover:text-danger text-foreground py-3 rounded-lg font-medium transition-colors border border-transparent hover:border-danger/30"
-                      >
-                        <AlertTriangle size={18} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
+          {/* Right Column: Interactive Review Card */}
+          <div className="lg:col-span-2 rounded-xl border border-white/10 bg-surface-100/60 p-4 overflow-hidden min-h-0">
+            <ReviewCard item={selectedItem} onAction={handleAction} />
           </div>
         </div>
       )}

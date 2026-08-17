@@ -1,52 +1,74 @@
 "use client";
 
-import { BarChart3, TrendingUp, AlertTriangle } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import React, { useEffect, useState } from "react";
+import { TemporalChart } from "@/components/analytics/TemporalChart";
+import { SpeciesDistribution } from "@/components/analytics/SpeciesDistribution";
+import { CameraHotspots } from "@/components/analytics/CameraHotspots";
+import { Download, FileJson, TrendingUp } from "lucide-react";
 
-const threatData = [
-  { zone: "Core Zone", threats: 12 },
-  { zone: "Buffer North", threats: 18 },
-  { zone: "Tiger Trail", threats: 5 },
-  { zone: "Village Border", threats: 24 },
-];
+export default function AnalyticsPage() {
+  const [speciesData, setSpeciesData] = useState([]);
+  const [temporalData, setTemporalData] = useState<Record<string, unknown> | null>(null);
+  const [hotspotData, setHotspotData] = useState([]);
 
-export default function Analytics() {
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/api/analytics/species")
+      .then((r) => r.json())
+      .then((d) => setSpeciesData(d?.data?.distribution || []))
+      .catch((e) => console.log("Baseline species:", e));
+
+    fetch("http://127.0.0.1:8000/api/analytics/temporal")
+      .then((r) => r.json())
+      .then((d) => setTemporalData(d?.data || null))
+      .catch((e) => console.log("Baseline temporal:", e));
+
+    fetch("http://127.0.0.1:8000/api/analytics/cameras")
+      .then((r) => r.json())
+      .then((d) => setHotspotData(d?.data?.hotspots || []))
+      .catch((e) => console.log("Baseline cameras:", e));
+  }, []);
+
   return (
     <div className="space-y-6">
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Analytics</h1>
-        <p className="text-foreground/70">Deep insights into wildlife populations and threat patterns.</p>
+      {/* Header */}
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-white mb-1 flex items-center gap-2">
+            <TrendingUp className="text-primary-400" size={28} />
+            Wildlife & Conservation Analytics
+          </h1>
+          <p className="text-xs text-foreground/70">
+            Circadian activity cycles, population census, and wildlife corridor density analysis
+          </p>
+        </div>
+
+        {/* Report Export Buttons */}
+        <div className="flex items-center gap-2">
+          <a
+            href="http://127.0.0.1:8000/api/analytics/export?format=csv"
+            className="px-3.5 py-2 rounded-lg bg-surface-200 hover:bg-surface-300 border border-white/10 text-xs font-semibold text-white flex items-center gap-2 transition-colors"
+          >
+            <Download size={14} className="text-emerald-400" /> Export CSV
+          </a>
+          <a
+            href="http://127.0.0.1:8000/api/analytics/export?format=json"
+            className="px-3.5 py-2 rounded-lg bg-surface-200 hover:bg-surface-300 border border-white/10 text-xs font-semibold text-white flex items-center gap-2 transition-colors"
+          >
+            <FileJson size={14} className="text-primary-400" /> Export JSON
+          </a>
+        </div>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="glass-card rounded-xl p-6">
-          <h3 className="text-lg font-medium text-white mb-6 flex items-center gap-2">
-            <AlertTriangle className="text-warning" size={18} />
-            Threat Heatmap (by Zone)
-          </h3>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={threatData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis dataKey="zone" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 12 }} tickLine={false} axisLine={false} />
-                <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.7)', fontSize: 12 }} tickLine={false} axisLine={false} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: 'var(--color-surface-100)', borderColor: 'rgba(255,255,255,0.1)', borderRadius: '8px', color: '#fff' }}
-                  cursor={{ fill: 'rgba(255,255,255,0.05)' }}
-                />
-                <Bar dataKey="threats" fill="var(--color-danger)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-        
-        <div className="glass-card rounded-xl p-6 flex items-center justify-center">
-          <div className="text-center text-foreground/50">
-            <TrendingUp size={48} className="mx-auto mb-4 opacity-50" />
-            <p>Population trend models generating...</p>
-            <p className="text-sm mt-2">Requires 30 days of data for baseline.</p>
-          </div>
-        </div>
+      {/* Circadian Activity Curve */}
+      <TemporalChart
+        hourly={temporalData?.hourly}
+        dayNightSplit={temporalData?.day_night_split}
+      />
+
+      {/* Grid: Species Population Table + Camera Hotspots */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <SpeciesDistribution distribution={speciesData} />
+        <CameraHotspots hotspots={hotspotData} />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React from "react";
 // Dynamic import required for Leaflet in Next.js (no SSR)
 import dynamic from "next/dynamic";
 import { Filter, Layers, Zap } from "lucide-react";

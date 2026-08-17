@@ -1,6 +1,6 @@
 "use client";
 
-import { Fingerprint, CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle } from "lucide-react";
 import Image from "next/image";
 
 export default function ReIdentification() {
@@ -22,7 +22,7 @@ export default function ReIdentification() {
             <div className="space-y-3">
               <div className="text-sm font-medium text-foreground/70 text-center uppercase tracking-wider">Current Detection</div>
               <div className="aspect-video bg-surface-200 rounded-lg relative overflow-hidden group">
-                <img src="https://images.unsplash.com/photo-1561731216-c3a4d99437d5?w=800&q=80" alt="Current tiger" className="w-full h-full object-cover" />
+                <Image src="https://images.unsplash.com/photo-1561731216-c3a4d99437d5?w=800&q=80" alt="Current tiger" className="w-full h-full object-cover" fill />
                 <div className="absolute inset-0 border-2 border-primary-500 rounded-lg pointer-events-none"></div>
               </div>
               <div className="flex justify-between text-sm text-foreground/60">
@@ -34,7 +34,7 @@ export default function ReIdentification() {
             <div className="space-y-3">
               <div className="text-sm font-medium text-foreground/70 text-center uppercase tracking-wider">Historical Match</div>
               <div className="aspect-video bg-surface-200 rounded-lg relative overflow-hidden group">
-                <img src="https://images.unsplash.com/photo-1561731216-c3a4d99437d5?w=800&q=80" alt="Matched tiger" className="w-full h-full object-cover filter brightness-90 grayscale-[0.2]" />
+                <Image src="https://images.unsplash.com/photo-1561731216-c3a4d99437d5?w=800&q=80" alt="Matched tiger" className="w-full h-full object-cover filter brightness-90 grayscale-[0.2]" fill />
               </div>
               <div className="flex justify-between text-sm text-foreground/60">
                 <span>CAM007 (Waterhole Alpha)</span>
